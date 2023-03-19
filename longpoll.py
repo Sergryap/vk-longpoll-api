@@ -75,12 +75,13 @@ def event_handler(token: str, event: dict, db: redis.Redis):
     user_id = event['object']['message']['from_id']
     start_buttons = ['start', '/start', 'начать', 'старт', '+']
     text = event['object']['message']['text'].lower().strip()
+    payload = json.loads(event['object']['message'].get('payload', '{}'))
     if not db.get(f'{user_id}_first_name'):
         user_data = get_user(token, user_id)
         if user_data:
             db.set(f'{user_id}_first_name', user_data[0].get('first_name'))
             db.set(f'{user_id}_last_name', user_data[0].get('last_name'))
-    if text in start_buttons:
+    if text in start_buttons or payload.get('button') == 'start':
         user_state = 'START'
         msg = f'''
             Привет, я бот этого чата.
