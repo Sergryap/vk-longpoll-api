@@ -1,10 +1,14 @@
 import requests
 import random
 import redis
+import json
 
 from pprint import pprint
 from environs import Env
 from textwrap import dedent
+
+
+
 
 
 def get_long_poll_server(token: str, group_id: int, /):
@@ -84,7 +88,21 @@ def event_handler(token: str, event: dict, db: redis.Redis):
             Для записи на курс нажмите:
             "Предстоящие курсы"             
             '''
-        send_message(token=token, user_id=user_id, message=dedent(msg))
+        button = [
+            [
+                {
+                    'action': {'type': 'text', 'payload': {'button': 'start'}, 'label': '☰ MENU'},
+                    'color': 'positive'
+                }
+            ]
+        ]
+        keyboard = {'inline': False, 'buttons': button}
+        send_message(
+            token=token,
+            user_id=user_id,
+            message=dedent(msg),
+            keyboard=json.dumps(keyboard, ensure_ascii=False)
+        )
     else:
         user_state = db.get(user_id).decode("utf-8")
         print(user_state)
@@ -102,7 +120,31 @@ def event_handler(token: str, event: dict, db: redis.Redis):
 
 def start(token: str, event: dict, db: redis.Redis):
     user_id = event['object']['message']['from_id']
-    send_message(token=token, user_id=user_id, message='MENU:')
+    start_buttons = [
+        ('Предстоящие курсы', 'future_courses'),
+        ('Ваши курсы', 'client_courses'),
+        ('Прошедшие курсы', 'past_courses'),
+        ('Написать администратору', 'admin_msg'),
+        ('Как нас найти', 'search_us')
+    ]
+    buttons = []
+    for label, payload in start_buttons:
+        buttons.append(
+            [
+                {
+                    'action': {'type': 'text', 'payload': {'button': payload}, 'label': label},
+                    'color': 'secondary'
+                }
+            ],
+        )
+    keyboard = {'inline': True, 'buttons': buttons}
+
+    send_message(
+        token=token,
+        user_id=user_id,
+        message='MENU:',
+        keyboard=json.dumps(keyboard, ensure_ascii=False)
+    )
     return 'START'
 
 
@@ -112,7 +154,6 @@ def listen_server(token: str, group_id: int, db: redis.Redis, /):
         response = connect_server(key, server, ts)
         ts = response['ts']
         events = response['updates']
-        # pprint(events)
         for event in events:
             if event['type'] in ['message_typing_state', 'message_reply']:
                 continue
