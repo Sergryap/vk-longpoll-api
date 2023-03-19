@@ -109,7 +109,7 @@ def event_handler(token: str, event: dict, db: redis.Redis):
 
     states_functions = {
         'START': start,
-        # 'MAIN_MENU': main_menu_handler,
+        'MAIN_MENU': main_menu_handler,
         # 'COURSE': handle_course_info,
         # 'PHONE': enter_phone,
     }
@@ -145,6 +145,16 @@ def start(token: str, event: dict, db: redis.Redis):
         message='MENU:',
         keyboard=json.dumps(keyboard, ensure_ascii=False)
     )
+    return 'MAIN_MENU'
+
+
+def main_menu_handler(token: str, event: dict, db: redis.Redis):
+    if event['object']['message'].get('payload'):
+        print(event['object']['message'].get('payload'))
+        # return send_main_menu_answer(token, event, db)
+    else:
+        print(event['object']['message']['text'])
+        # return answer_arbitrary_text(token, event, db)
     return 'START'
 
 
