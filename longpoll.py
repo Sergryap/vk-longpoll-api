@@ -6,9 +6,7 @@ import json
 from pprint import pprint
 from environs import Env
 from textwrap import dedent
-
-
-
+from time import sleep
 
 
 def get_long_poll_server(token: str, group_id: int, /):
@@ -162,13 +160,22 @@ def main_menu_handler(token: str, event: dict, db: redis.Redis):
 def listen_server(token: str, group_id: int, db: redis.Redis, /):
     key, server, ts = get_long_poll_server(token, group_id)
     while True:
-        response = connect_server(key, server, ts)
-        ts = response['ts']
-        events = response['updates']
-        for event in events:
-            if event['type'] in ['message_typing_state', 'message_reply']:
-                continue
-            event_handler(token, event, db)
+        try:
+            response = connect_server(key, server, ts)
+            ts = response['ts']
+            events = response['updates']
+            pprint(events)
+            for event in events:
+                if event['type'] != 'message_new':
+                    continue
+                event_handler(token, event, db)
+        except ConnectionError as err:
+            sleep(5)
+            continue
+        except requests.exceptions.ReadTimeout as err:
+            continue
+        except Exception as err:
+            print(err)
 
 
 if __name__ == '__main__':
