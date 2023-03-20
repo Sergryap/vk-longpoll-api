@@ -3,3 +3,4 @@ environs==9.5.0
 redis==4.5.1
 aiohttp==3.8.4
 asgiref==3.6.0
+more-itertools==9.1.0

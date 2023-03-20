@@ -10,6 +10,7 @@ from environs import Env
 from textwrap import dedent
 from time import sleep
 from asgiref.sync import sync_to_async
+from more_itertools import chunked
 
 
 async def get_long_poll_server(session: aiohttp.ClientSession, token: str, group_id: int, /):
@@ -160,13 +161,133 @@ async def start(session: aiohttp.ClientSession, token: str, event: dict, db: red
 
 
 async def main_menu_handler(session: aiohttp.ClientSession, token: str, event: dict, db: redis.Redis):
-    if event['object']['message'].get('payload'):
-        print(event['object']['message'].get('payload'))
-        # return send_main_menu_answer(token, event, db)
+    payload = json.loads(event['object']['message'].get('payload', '{}'))
+    if payload:
+        return await send_main_menu_answer(session, token, event, db)
     else:
         print(event['object']['message']['text'])
         # return answer_arbitrary_text(token, event, db)
     return 'START'
+
+
+#######################################
+## Функции, не являющиеся хэндлерами ##
+#######################################
+async def send_main_menu_answer(session: aiohttp.ClientSession, token: str, event: dict, db: redis.Redis):
+    user_id = event['object']['message']['from_id']
+    payload = json.loads(event['object']['message'].get('payload', '{}'))
+    user_instance = await Client.objects.async_get(vk_id=user_id)
+    user_info = {
+        'first_name': db.get(f'{user_id}_first_name').decode('utf-8'),
+        'last_name': db.get(f'{user_id}_last_name').decode('utf-8')
+    }
+    # отправка курсов пользователя
+    if payload.get('button') == 'client_courses':
+        client_courses = await sync_to_async(user_instance.courses.filter)(published_in_bot=True)
+        return await send_courses(
+            session, token, event, client_courses,
+            'Вы еше не записаны ни на один курс:',
+            'Курсы, на которые вы записаны или проходили:',
+            'Еще ваши курсы',
+            back='client_courses',
+        )
+    # отправка предстоящих курсов
+    elif payload.get('button') == 'future_courses':
+        future_courses = await Course.objects.async_filter(scheduled_at__gt=timezone.now(), published_in_bot=True)
+        return await send_courses(
+            session, token, event, future_courses,
+            'Пока нет запланированных курсов:',
+            'Предстоящие курсы. Выберите для детальной информации',
+            'Еще предстоящие курсы:',
+            back='future_courses',
+        )
+    # отправка прошедших курсов
+    elif payload.get('button') == 'past_courses':
+        past_courses = await Course.objects.async_filter(scheduled_at__lte=timezone.now(), published_in_bot=True)
+        return await send_courses(
+            session, token, event, past_courses,
+            'Еше нет прошедших курсов:',
+            'Прошедшие курсы',
+            'Еще прошедшие курсы:',
+            back='past_courses',
+        )
+    elif payload.get('button') == 'admin_msg':
+        user_msg = f'{user_info["first_name"]}, введите и отправьте ваше сообщение:'
+        await send_message(session, token, user_id, message=user_msg)
+
+
+async def send_courses(session: aiohttp.ClientSession, token, event, courses, msg1, msg2, msg3, /, *, back):
+    user_id = event['object']['message']['from_id']
+    i = 0
+    for client_courses_part in await sync_to_async(chunked)(courses, 5):
+        i += 1
+        msg = msg2 if i == 1 else msg3
+        keyboard = await get_course_buttons(client_courses_part, back=back)
+        await send_message(
+            session, token, user_id, message=msg,
+            keyboard=keyboard
+        )
+    if i == 0:
+        button = [
+            [
+                {
+                    'action': {'type': 'text', 'payload': {'button': 'start'}, 'label': '☰ MENU'},
+                    'color': 'secondary'
+                }
+            ]
+        ]
+        keyboard = {'inline': False, 'buttons': button}
+        await send_message(
+            session, token, user_id, message=msg1,
+            keyboard=json.dumps(keyboard, ensure_ascii=False)
+        )
+    return 'COURSE'
+
+
+async def get_course_buttons(course_instances, back):
+    buttons = []
+    gallery_payload = None
+    for course in course_instances:
+        if course.name == 'Фотогалерея':
+            gallery_payload = {'course_pk': course.pk, 'button': back}
+            continue
+        buttons.append(
+            [
+                {
+                    'action': {
+                        'type': 'text',
+                        'payload': {'course_pk': course.pk, 'button': back},
+                        'label': course.name
+                    },
+                    'color': 'secondary'
+                }
+            ],
+        )
+    buttons.append(
+        [
+            {
+                'action': {
+                    'type': 'text',
+                    'payload': {'button': 'start'},
+                    'label': '☰ MENU'
+                },
+                'color': 'primary'
+            }
+        ],
+    )
+    if gallery_payload:
+        buttons[-1].append(
+            {
+                'action': {
+                    'type': 'text',
+                    'payload': gallery_payload,
+                    'label': 'ГАЛЕРЕЯ'
+                },
+                'color': 'primary'
+            }
+        )
+    keyboard = {'inline': True, 'buttons': buttons}
+    return json.dumps(keyboard, ensure_ascii=False)
 
 
 async def listen_server():
