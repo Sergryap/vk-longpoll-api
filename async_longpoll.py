@@ -12,28 +12,27 @@ from time import sleep
 from asgiref.sync import sync_to_async
 
 
-async def get_long_poll_server(token: str, group_id: int, /):
+async def get_long_poll_server(session: aiohttp.ClientSession, token: str, group_id: int, /):
     get_album_photos_url = 'https://api.vk.com/method/groups.getLongPollServer'
     params = {'access_token': token, 'v': '5.131', 'group_id': group_id}
-    async with aiohttp.ClientSession() as session:
-        async with session.get(get_album_photos_url, params=params) as res:
-            res.raise_for_status()
-            response = await sync_to_async(json.loads)(await res.text())
-            key = response['response']['key']
-            server = response['response']['server']
-            ts = response['response']['ts']
-            return key, server, ts
+    async with session.get(get_album_photos_url, params=params) as res:
+        res.raise_for_status()
+        response = json.loads(await res.text())
+        key = response['response']['key']
+        server = response['response']['server']
+        ts = response['response']['ts']
+        return key, server, ts
 
 
-async def connect_server(key, server, ts):
+async def connect_server(session: aiohttp.ClientSession, key, server, ts):
     params = {'act': 'a_check', 'key': key, 'ts': ts, 'wait': 25}
-    async with aiohttp.ClientSession() as session:
-        async with session.get(server, params=params) as res:
-            res.raise_for_status()
-            return await sync_to_async(json.loads)(await res.text())
+    async with session.get(server, params=params) as res:
+        res.raise_for_status()
+        return json.loads(await res.text())
 
 
 async def send_message(
+        session: aiohttp.ClientSession,
         token: str,
         user_id: int,
         message: str,
@@ -60,35 +59,33 @@ async def send_message(
     for param, value in params.copy().items():
         if value is None:
             del params[param]
-    async with aiohttp.ClientSession() as session:
-        async with session.post(send_message_url, params=params) as res:
-            print(await res.text())
-            res.raise_for_status()
-            return await sync_to_async(json.loads)(await res.text())
+    async with session.post(send_message_url, params=params) as res:
+        print(await res.text())
+        res.raise_for_status()
+        return json.loads(await res.text())
 
 
-async def get_user(token: str, user_ids: str):
+async def get_user(session: aiohttp.ClientSession, token: str, user_ids: str):
     get_users_url = 'https://api.vk.com/method/users.get'
     params = {
         'access_token': token, 'v': '5.131',
         'user_ids': user_ids
     }
-    async with aiohttp.ClientSession() as session:
-        async with session.get(get_users_url, params=params) as res:
-            # res.raise_for_status()
-            response = await sync_to_async(json.loads)(await res.text())
-            return response.get('response')
+    async with session.get(get_users_url, params=params) as res:
+        res.raise_for_status()
+        response = json.loads(await res.text())
+        return response.get('response')
 
 
-async def event_handler(token: str, event: dict, db: redis.Redis):
+async def event_handler(session: aiohttp.ClientSession, token: str, event: dict, db: redis.Redis):
     """Главный обработчик событий"""
 
     user_id = event['object']['message']['from_id']
     start_buttons = ['start', '/start', 'начать', 'старт', '+']
     text = event['object']['message']['text'].lower().strip()
-    payload = await sync_to_async(json.loads)(event['object']['message'].get('payload', '{}'))
+    payload = json.loads(event['object']['message'].get('payload', '{}'))
     if not db.get(f'{user_id}_first_name'):
-        user_data = await get_user(token, user_id)
+        user_data = await get_user(session, token, user_id)
         if user_data:
             db.set(f'{user_id}_first_name', user_data[0].get('first_name'))
             db.set(f'{user_id}_last_name', user_data[0].get('last_name'))
@@ -111,10 +108,11 @@ async def event_handler(token: str, event: dict, db: redis.Redis):
         keyboard = {'inline': False, 'buttons': button}
 
         await send_message(
+            session,
             token=token,
             user_id=user_id,
             message=dedent(msg),
-            keyboard=await sync_to_async(json.dumps)(keyboard, ensure_ascii=False)
+            keyboard=json.dumps(keyboard, ensure_ascii=False)
         )
     else:
         user_state = db.get(user_id).decode("utf-8")
@@ -127,11 +125,11 @@ async def event_handler(token: str, event: dict, db: redis.Redis):
         # 'PHONE': enter_phone,
     }
     state_handler = states_functions[user_state]
-    next_state = await state_handler(token, event, db)
+    next_state = await state_handler(session, token, event, db)
     db.set(user_id, next_state)
 
 
-async def start(token: str, event: dict, db: redis.Redis):
+async def start(session: aiohttp.ClientSession, token: str, event: dict, db: redis.Redis):
     user_id = event['object']['message']['from_id']
     start_buttons = [
         ('Предстоящие курсы', 'future_courses'),
@@ -152,15 +150,16 @@ async def start(token: str, event: dict, db: redis.Redis):
         )
     keyboard = {'inline': True, 'buttons': buttons}
     await send_message(
+        session,
         token=token,
         user_id=user_id,
         message='MENU:',
-        keyboard=await sync_to_async(json.dumps)(keyboard, ensure_ascii=False)
+        keyboard=json.dumps(keyboard, ensure_ascii=False)
     )
     return 'MAIN_MENU'
 
 
-async def main_menu_handler(token: str, event: dict, db: redis.Redis):
+async def main_menu_handler(session: aiohttp.ClientSession, token: str, event: dict, db: redis.Redis):
     if event['object']['message'].get('payload'):
         print(event['object']['message'].get('payload'))
         # return send_main_menu_answer(token, event, db)
@@ -168,15 +167,6 @@ async def main_menu_handler(token: str, event: dict, db: redis.Redis):
         print(event['object']['message']['text'])
         # return answer_arbitrary_text(token, event, db)
     return 'START'
-
-
-def run_coroutines(coroutines):
-    while True:
-        for coroutine in coroutines.copy():
-            try:
-                coroutine.send(None)
-            except StopIteration:
-                coroutines.remove(coroutine)
 
 
 async def listen_server():
@@ -188,26 +178,27 @@ async def listen_server():
     redis_db = redis.Redis(host=redis_host, port=redis_port, password=redis_password)
     token = env.str('TOKEN')
     group_id = env.int('GROUP_ID')
-    key, server, ts = await get_long_poll_server(token, group_id)
-    while True:
-        try:
-            response = await connect_server(key, server, ts)
-            ts = response['ts']
-            events = response['updates']
-            pprint(events)
-            for event in events:
-                if event['type'] != 'message_new':
-                    continue
-                await event_handler(token, event, redis_db)
-        except ConnectionError as err:
-            sleep(5)
-            print(f'1{err}')
-            continue
-        except requests.exceptions.ReadTimeout as err:
-            print(f'2{err}')
-            continue
-        # except Exception as err:
-        #     print(f'3{err}')
+    async with aiohttp.ClientSession() as session:
+        key, server, ts = await get_long_poll_server(session, token, group_id)
+        while True:
+            try:
+                response = await connect_server(session, key, server, ts)
+                ts = response['ts']
+                events = response['updates']
+                pprint(events)
+                for event in events:
+                    if event['type'] != 'message_new':
+                        continue
+                    await event_handler(session, token, event, redis_db)
+            except ConnectionError as err:
+                sleep(5)
+                print(err)
+                continue
+            except requests.exceptions.ReadTimeout as err:
+                print(err)
+                continue
+            except Exception as err:
+                print(err)
 
 
 if __name__ == '__main__':
