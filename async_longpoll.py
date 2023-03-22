@@ -220,7 +220,18 @@ async def listen_server():
         connect = {'session': session, 'token': token, 'redis_db': redis_db}
         while True:
             try:
-                response = await connect_server(session, key, server, ts)
+                params = {'act': 'a_check', 'key': key, 'ts': ts, 'wait': 25}
+                async with session.get(server, params=params) as res:
+                    res.raise_for_status()
+                    response = json.loads(await res.text())
+                if 'failed' in response:
+                    if response['failed'] == 1:
+                        ts = response['ts']
+                    elif response['failed'] == 2:
+                        key, __, __ = await get_long_poll_server(session, token, group_id)
+                    elif response['failed'] == 3:
+                        key, __, ts = await get_long_poll_server(session, token, group_id)
+                    continue
                 ts = response['ts']
                 events = response['updates']
                 pprint(events)
@@ -236,11 +247,12 @@ async def listen_server():
             except requests.exceptions.ReadTimeout as err:
                 sleep(5)
                 print(err)
+                key, server, ts = await get_long_poll_server(session, token, group_id)
                 continue
             except Exception as err:
                 sleep(5)
+                key, server, ts = await get_long_poll_server(session, token, group_id)
                 print(err)
-
 
 if __name__ == '__main__':
     asyncio.run(listen_server())
