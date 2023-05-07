@@ -242,5 +242,48 @@ async def listen_server():
                 print(err)
 
 
+async def listen_server_v1():
+    token = settings.VK_TOKEN
+    async with aiohttp.ClientSession() as session:
+        key, server, ts = await get_long_poll_server(session, token, settings.VK_GROUP_ID)
+        connect = {'session': session, 'token': token, 'redis_db': settings.REDIS_DB}
+        while True:
+            try:
+                params = {'act': 'a_check', 'key': key, 'ts': ts, 'wait': 25}
+                async with session.get(server, params=params) as res:
+                    res.raise_for_status()
+                    response = json.loads(await res.text())
+                if 'failed' in response:
+                    if response['failed'] == 1:
+                        ts = response['ts']
+                    elif response['failed'] == 2:
+                        key, __, __ = await get_long_poll_server(session, token, settings.VK_GROUP_ID)
+                    elif response['failed'] == 3:
+                        key, __, ts = await get_long_poll_server(session, token, settings.VK_GROUP_ID)
+                    continue
+                ts = response['ts']
+                for event in response['updates']:
+                    if event['type'] != 'message_new':
+                        continue
+                    await asyncio.sleep(0.2)
+                    await event_handler(connect, event)
+            except ConnectionError as err:
+                sleep(5)
+                logger.warning(f'Соединение было прервано: {err}', stack_info=True)
+                key, server, ts = await get_long_poll_server(session, token, settings.VK_GROUP_ID)
+                continue
+            except client_exceptions.ServerTimeoutError as err:
+                logger.warning(f'Ошибка ReadTimeout: {err}', stack_info=True)
+                key, server, ts = await get_long_poll_server(session, token, settings.VK_GROUP_ID)
+                continue
+            except Exception as err:
+                logger.exception(err)
+                key, server, ts = await get_long_poll_server(session, token, settings.VK_GROUP_ID)
+        logger.critical('Бот вышел из цикла и упал:', stack_info=True)
+
+
+
+
+
 if __name__ == '__main__':
     asyncio.run(listen_server())
